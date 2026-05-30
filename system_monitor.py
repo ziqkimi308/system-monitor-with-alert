@@ -82,7 +82,7 @@ def setup_logging():
 	ch.setLevel(logging.WARNING)
 
 	# formatter
-	formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+	formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s') # this formatting is logging specific
 	fh.setFormatter(formatter)
 	ch.setFormatter(formatter)
 
@@ -95,3 +95,115 @@ def setup_logging():
 # Initialize logger
 logger = setup_logging()
 
+# CPU, Memory, Disk Usage
+
+def get_cpu_usage() -> float:
+	"""
+	Return current CPU usage percentage.
+
+	interval is delay or sleep before capture.
+
+	"""
+
+	return psutil.cpu_percent(interval=1)
+
+def get_memory_usage() -> float:
+	"""
+	Return current memory (RAM) usage percentage.
+
+	"""
+
+	return psutil.virtual_memory().percent
+
+def get_disk_usage() -> float:
+	"""
+	Return disk usage for all mounted partitions, excluding pseudo filesystems.
+
+	"""
+	disks = []
+	# disk_partitions return partition object (sdiskpart) with 4 attributes
+	# mountpoint, device, fstype, opts
+	for partition in psutil.disk_partitions():
+		# skip pseudo filesystems
+		if partition.fstype in ('squashfs', 'tmpfs', 'devtmpfs', 'proc', 'sysfs'):
+			continue
+		try:
+			# also can direct use C:// or D:// which is same .mountpoint
+			usage = psutil.disk_usage(partition.mountpoint)
+			# all unit default bytes
+			disks.append({
+				'mountpoint': partition.mountpoint,
+                'device': partition.device,
+                'total_gb': usage.total / (1024**3),
+                'used_gb': usage.used / (1024**3),
+                'free_gb': usage.free / (1024**3),
+                'percent': usage.percent
+			})
+
+		except PermissionError:
+			continue
+	
+	return disks
+
+def get_system_info() -> dict:
+	"""
+	Collect all system metrics into a dictionary.
+
+	"""
+
+	return {
+        'timestamp': datetime.now().isoformat(),
+        'cpu_percent': get_cpu_usage(),
+        'memory_percent': get_memory_usage(),
+        'disks': get_disk_usage()
+    }
+
+def check_thresholds(info: dict) -> list[str]:
+	"""
+	"""
+
+	alerts = []
+	if info['cpu_percent'] > CPU_THRESHOLD:
+		alerts.append(f"CPU usage is high: {info['cpu_percent']:.1f}% (threshold: {CPU_THRESHOLD}%)")
+
+	if info['memory_percent'] > MEMORY_THRESHOLD:
+		alerts.append(f"Memory usage is high: {info['memory_percent']:.1f}% (threshold: {MEMORY_THRESHOLD}%)")
+	
+	for disk in info['disks']:
+		if disk['percent'] > DISK_THRESHOLD:
+			alerts.append(alerts.append(
+				f"Disk {disk['mountpoint']} ({disk['device']}) usage is high: "
+				f"{disk['percent']:.1f}% (threshold: {DISK_THRESHOLD}%)"
+				))
+			
+	return alerts
+
+def send_email_alert(subject: str, body: str) -> bool:
+	"""
+	"""
+
+	# Safety Guard
+	if not all([SENDER_EMAIL, SENDER_PASSWORD, RECIPIENT_EMAIL]):
+		logger.error("Email credentials not fully configured. Cannot send alert.")
+		return False
+	
+	message = EmailMessage()
+	message.set_content(body)
+	message['Subject'] = subject
+	message['From'] = SENDER_EMAIL
+	message['To'] = RECIPIENT_EMAIL
+
+	try:
+		with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+			server.starttls()
+			server.login(SENDER_EMAIL, SENDER_PASSWORD)
+			server.send_message(message)
+		# goes into log file but does not show in console because file handler accepts log INFO level while console handler only WARNING+ Level.
+		logger.info(f"Alert email sent: {subject}")
+
+		return True
+
+	except Exception as e:
+		logger.error(f"Failed to send email: {e}") 
+
+		return False
