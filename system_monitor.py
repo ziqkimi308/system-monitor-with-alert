@@ -60,3 +60,38 @@ LOG_FILE = LOG_DIR / 'monitor.log'
 
 # ---------------------------------------------------------------- #
 
+def setup_logging():
+	"""
+	"""
+
+	# Setup logging Instance
+	logger = logging.getLogger('SystemMonitor')
+	logger.setLevel(logging.INFO) # remember logging levels in linux fundamental? debug, info, notice, warn, error, critical, alert, emergency
+
+	# Setup handlers
+
+	# File
+	from logging.handlers import RotatingFileHandler
+	# RotatingFileHandler auto rotates (create new file), when current gets too big
+	# max size 10MB
+	fh = RotatingFileHandler(LOG_FILE, maxBytes=10*1024*1024, backupCount=5)
+	fh.setLevel(logging.INFO)
+	
+	# Console
+	ch = logging.StreamHandler()
+	ch.setLevel(logging.WARNING)
+
+	# formatter
+	formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+	fh.setFormatter(formatter)
+	ch.setFormatter(formatter)
+
+	# Add handlers to logger object
+	logger.addHandler(fh)
+	logger.addHandler(ch)
+
+	return logger
+
+# Initialize logger
+logger = setup_logging()
+
