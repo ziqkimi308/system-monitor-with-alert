@@ -207,3 +207,42 @@ def send_email_alert(subject: str, body: str) -> bool:
 		logger.error(f"Failed to send email: {e}") 
 
 		return False
+	
+def run_check(send_alerts: bool = True) -> dict:
+	"""
+	Perform a single system check, log results, and optionally send alerts.
+
+	"""
+
+	# fetch current system data
+	info = get_system_info()
+
+	# log the data
+	logger.info(f"CPU: {info['cpu_percent']:.1f}%, Memory: {info['memory_percent']:.1f}%")
+	for disk in info['disks']:
+		logger.debug(f"Disk {disk['mountpoint']}: {disk['percent']:.1f}% used")
+	
+	alerts = check_thresholds(info)
+	if alerts:
+		logger.warning(f"Alerts triggered: {len(alerts)} issue(s)")
+		for alert in alerts:
+			logger.warning(f"  - {alert}")
+
+		if send_alerts:
+			subject = f"System Monitor Alert - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+
+			body = "The following thresholds were exceeded:\n\n" + "\n".join(alerts)
+
+			body += f"\n\nCPU: {info['cpu_percent']:.1f}%\nMemory: {info['memory_percent']:.1f}%\n"
+			body += "Disk usage:\n"
+
+			for disk in info['disks']:
+				body += f"  {disk['mountpoint']}: {disk['percent']:.1f}% ({disk['free_gb']:.1f} GB free)\n"
+				
+			send_email_alert(subject, body)
+		
+	else:
+		logger.info("All metrics within normal ranges.")
+	
+	return info
+
