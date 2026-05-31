@@ -62,7 +62,11 @@ LOG_FILE = LOG_DIR / 'monitor.log'
 
 def setup_logging():
 	"""
-	"""
+    Configure and return a logger instance with both file and console handlers.
+    File handler uses rotating logs (10 MB max, 5 backups).
+    Console handler shows WARNING and above.
+	
+    """
 
 	# Setup logging Instance
 	logger = logging.getLogger('SystemMonitor')
@@ -115,11 +119,12 @@ def get_memory_usage() -> float:
 
 	return psutil.virtual_memory().percent
 
-def get_disk_usage() -> float:
+def get_disk_usage() -> list[dict]:
 	"""
 	Return disk usage for all mounted partitions, excluding pseudo filesystems.
 
 	"""
+	
 	disks = []
 	# disk_partitions return partition object (sdiskpart) with 4 attributes
 	# mountpoint, device, fstype, opts
@@ -160,7 +165,10 @@ def get_system_info() -> dict:
 
 def check_thresholds(info: dict) -> list[str]:
 	"""
-	"""
+    Compare collected system metrics against configured thresholds.
+    Return a list of alert messages if any values exceed limits.
+
+    """
 
 	alerts = []
 	if info['cpu_percent'] > CPU_THRESHOLD:
@@ -171,16 +179,19 @@ def check_thresholds(info: dict) -> list[str]:
 	
 	for disk in info['disks']:
 		if disk['percent'] > DISK_THRESHOLD:
-			alerts.append(alerts.append(
+			alerts.append(
 				f"Disk {disk['mountpoint']} ({disk['device']}) usage is high: "
 				f"{disk['percent']:.1f}% (threshold: {DISK_THRESHOLD}%)"
-				))
+				)
 			
 	return alerts
 
 def send_email_alert(subject: str, body: str) -> bool:
 	"""
-	"""
+    Send an email alert with the given subject and body using SMTP credentials.
+    Return True if successful, False otherwise.
+
+    """
 
 	# Safety Guard
 	if not all([SENDER_EMAIL, SENDER_PASSWORD, RECIPIENT_EMAIL]):
@@ -246,3 +257,92 @@ def run_check(send_alerts: bool = True) -> dict:
 	
 	return info
 
+def main():
+	"""
+	Parse command-line arguments and orchestrate monitoring behavior.
+    Supports single check (--once), continuous monitoring (--interval),
+    or scheduled checks (--schedule). Handles email alert toggling.
+
+	"""
+
+	parser = argparse.ArgumentParser(
+		description="System Monitor & Alert Script",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+		epilog="""
+Examples:
+  # Run a single check
+  python system_monitor.py --once
+
+  # Monitor continuously every 60 seconds
+  python system_monitor.py --interval 60
+
+  # Schedule checks every 5 minutes (requires schedule library)
+  python system_monitor.py --schedule 5
+
+Environment variables:
+  CPU_THRESHOLD, MEMORY_THRESHOLD, DISK_THRESHOLD
+  SMTP_SERVER, SMTP_PORT, SENDER_EMAIL, SENDER_PASSWORD, RECIPIENT_EMAIL
+  LOG_DIR
+        """
+	)
+
+	# mutually exclusive means only one of this arg can be run at a time. Not more than one.
+	group = parser.add_mutually_exclusive_group(required=True)
+	group.add_argument('--once', action='store_true', help='Run a single check and exit')
+	group.add_argument('--interval', type=int, metavar='SECONDS', help='Run continuously with given interval')
+	group.add_argument('--schedule', type=int, metavar='MINUTES', help='Schedule checks every N minutes (requires schedule library)')
+
+	# normal argument
+	parser.add_argument('--no-alerts', action='store_true', help='Disable email alerts (useful for testing)')
+
+	args = parser.parse_args()
+
+	# Handle args
+
+	# Safety guard
+	if not args.no_alerts and not all([SENDER_EMAIL, SENDER_PASSWORD, RECIPIENT_EMAIL]):
+		logger.warning("Email credentials incomplete. Alerts will be logged but not sent.")
+		args.no_alerts = True
+	
+	# handle --once
+	if args.once:
+		# if args.no_alerts is True, then send_alerts is not True which is False.
+		run_check(send_alerts=not args.no_alerts)
+		return 0
+	
+	# handle --interval
+	elif args.interval:
+		logger.info(f"Starting continuous monitoring every {args.interval} seconds.")
+
+		try:
+			while True:
+				run_check(send_alerts=not args.no_alerts)
+				time.sleep(args.interval)
+		except KeyboardInterrupt:
+			logger.info("Monitoring stopped by user.")
+			return 0
+	
+	# handle --schedule
+	elif args.schedule:
+		if not SCHEDULE_AVAILABLE:
+			print("Error: 'schedule' library not installed. Install with: pip install schedule", file=sys.stderr)
+			return 1
+
+		logger.info(f"Scheduling checks every {args.schedule} minutes.")
+
+		# Define schedule job first
+		schedule.every(args.schedule).minutes.do(run_check, send_alerts=not args.no_alerts)
+
+		try:
+			while True:
+				# Run pending job
+				schedule.run_pending()
+				time.sleep(1)
+		except KeyboardInterrupt:
+			logger.info("Scheduled monitoring stopped by user.")
+			return 0
+	
+	return 0
+
+if __name__ == "__main__":
+	sys.exit(main())
